@@ -41,10 +41,10 @@
         }
     }
 
+    // Без перемотки в начало: seekTo заставил бы YouTube заново наполнять буфер.
     function start() {
         player.unMute();
         player.setVolume(100);
-        if (buffered) player.seekTo(0, true);
         player.playVideo();
     }
 
@@ -68,7 +68,6 @@
                     if (preload && !buffered && !wantPlay && e.data === YT.PlayerState.PLAYING) {
                         buffered = true;
                         player.pauseVideo();
-                        player.seekTo(0, true);
                         send('buffered');
                         return;
                     }
