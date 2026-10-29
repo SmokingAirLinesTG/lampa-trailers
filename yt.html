@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Лента трейлеров: плеер</title>
+    <style>
+        html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+        /* Как bridge Lampa: плеер вдвое больше и сдвинут, панели YouTube остаются за краем экрана. */
+        iframe { position: absolute; left: 0; top: -300px; border: 0; transform-origin: left top; transform: scale(0.5); }
+    </style>
+</head>
+<body>
+<div id="player"></div>
+<script src="https://www.youtube.com/iframe_api"></script>
+<script>
+    // ?id=<bridgeId>&v=<videoId>&preload=1|0
+    // preload=1: играем без звука до первого кадра, ставим паузу и ждём команду play — ролик уже в буфере.
+    function param(name) {
+        var m = new RegExp('[?&]' + name + '=([^&#]*)').exec(location.search);
+        return m ? decodeURIComponent(m[1]) : '';
+    }
+
+    var id = param('id');
+    var preload = param('preload') === '1';
+    var player = null;
+    var ready = false;
+    var buffered = false;
+    var wantPlay = !preload;
+
+    function send(type, data) {
+        try { parent.postMessage({ bridgeId: id, type: type, data: data || {} }, '*'); } catch (e) {}
+    }
+
+    function resize() {
+        var f = document.getElementById('player');
+        if (f) {
+            f.style.width = window.innerWidth * 2 + 'px';
+            f.style.height = (window.innerHeight + 600) * 2 + 'px';
+        }
+    }
+
+    function start() {
+        player.unMute();
+        player.setVolume(100);
+        if (buffered) player.seekTo(0, true);
+        player.playVideo();
+    }
+
+    window.onYouTubeIframeAPIReady = function () {
+        player = new YT.Player('player', {
+            videoId: param('v'),
+            width: '100%',
+            height: '100%',
+            playerVars: {
+                autoplay: 1, mute: preload ? 1 : 0, controls: 0, rel: 0, modestbranding: 1, playsinline: 1,
+                iv_load_policy: 3, disablekb: 1, fs: 0, enablejsapi: 1, origin: location.origin
+            },
+            events: {
+                onReady: function () {
+                    ready = true;
+                    resize();
+                    if (preload && wantPlay) start();
+                    send('ready');
+                },
+                onStateChange: function (e) {
+                    if (preload && !buffered && !wantPlay && e.data === YT.PlayerState.PLAYING) {
+                        buffered = true;
+                        player.pauseVideo();
+                        player.seekTo(0, true);
+                        send('buffered');
+                        return;
+                    }
+                    send('stateChange', { state: e.data });
+                },
+                onError: function (e) { send('error', { error: e.data }); }
+            }
+        });
+        resize();
+    };
+
+    window.addEventListener('resize', resize);
+    window.addEventListener('message', function (e) {
+        var d = e.data;
+        if (!d || d.bridgeId !== id) return;
+        if (d.type === 'play') {
+            wantPlay = true;
+            if (ready) start();
+        }
+        if (d.type === 'destroy' && player) {
+            try { player.destroy(); } catch (err) {}
+            player = null;
+        }
+    });
+
+    send('bridgeReady');
+</script>
+</body>
+</html>

@@ -8,15 +8,21 @@
 
     var tmdb = Lampa.Api.sources.tmdb;
     var TYPES = { movie: 'Фильмы', tv: 'Сериалы' };
-    var AHEAD = 3; // сколько следующих постеров показывать и заранее готовить
+    var AHEAD = 3;        // следующих постеров в колонке справа
+    var META_AHEAD = 10;  // для скольких следующих заранее узнать трейлер, логотип и загрузить картинки
+    // Живых плееров впереди: каждый — YouTube-iframe на сотню МБ, а у ТВ 1,8 ГБ и один-два видеодекодера.
+    var LIVE_AHEAD = 2;
+    var BRIDGE = ((document.currentScript && document.currentScript.src) ||
+        'https://smokingairlinestg.github.io/lampa-trailers/feed.js').split('?')[0].replace(/[^/]*$/, '') + 'yt.html';
 
     var css = '' +
-        // На весь экран: bridge-плеер YouTube из Lampa кадрирует видео под размер окна.
+        // На весь экран: bridge-плеер кадрирует видео под размер окна.
         '.tfeed{position:fixed;left:0;top:0;width:100%;height:100%;background:#000;overflow:hidden}' +
         'body.tfeed--on .head{display:none}' +
         '.tfeed__bg,.tfeed__video,.tfeed__video iframe{position:absolute;left:0;top:0;width:100%;height:100%;border:0}' +
         '.tfeed__bg{background-size:cover;background-position:center;opacity:.35}' +
         '.tfeed__video iframe{pointer-events:none}' +
+        '.tfeed__video iframe.tfeed__pre{opacity:0}' +
         '.tfeed__chip{position:absolute;left:3em;top:2em;padding:.4em .9em;border-radius:1em;' +
             'background:rgba(0,0,0,.55);font-size:1.1em}' +
         '.tfeed__side{position:absolute;right:2.5em;top:50%;transform:translateY(-50%)}' +
@@ -71,9 +77,10 @@
         var type, genre, items, index, dir, page, totalPages, loading, waiters;
         var feedGen = 0;      // отбрасывает страницы прежнего жанра, если его сменили во время загрузки
         var seq = 0;          // отбрасывает ответы для фильма, с которого уже пролистали
-        var bridgeId = '';
+        var players = [];     // текущий и предзагруженные: {item, id, frame, ready}
+        var cur = null;       // плеер, который сейчас на экране
         var nextTimer, watchdog;
-        var heard = '';       // последний ответ YouTube-плеера, для сообщения о зависании
+        var heard = '';       // последний ответ текущего плеера, для сообщения о зависании
         var self = this;
 
         function status(text) {
@@ -94,7 +101,7 @@
             waiters = [];
             feedGen++;
             seq++;
-            stopVideo();
+            stopAll();
             html.find('.tfeed__side').empty();
             html.find('.tfeed__chip').text(TYPES[type] + ' · ' + genreTitle(type, genre));
         }
@@ -162,36 +169,99 @@
             }, cb);
         }
 
-        function stopVideo() {
-            clearTimeout(nextTimer);
-            clearTimeout(watchdog);
-            bridgeId = '';
-            html.find('.tfeed__video').empty();
-        }
-
         function fullscreen(on) {
             $('body').toggleClass('tfeed--on', on);
         }
 
-        function playVideo(key) {
-            stopVideo();
-            bridgeId = 'tfeed_' + Math.random().toString(36).slice(2);
-            var frame = document.createElement('iframe');
-            frame.setAttribute('tabindex', '-1');
-            frame.setAttribute('allow', 'autoplay; encrypted-media');
-            frame.src = Lampa.Manifest.github_lampa + 'youtube.html?bridgeId=' + bridgeId +
-                '&videoId=' + key + '&autoplay=1&controls=0&mute=0&start=0';
-            html.find('.tfeed__video').append(frame);
+        function post(p, type) {
+            try { p.frame[0].contentWindow.postMessage({ bridgeId: p.id, type: type }, '*'); } catch (e) {}
+        }
+
+        function findPlayer(item) {
+            return players.filter(function (p) { return p.item === item; })[0];
+        }
+
+        function makePlayer(item, preload) {
+            var p = { item: item, id: 'tfeed_' + Math.random().toString(36).slice(2), ready: false };
+            p.frame = $('<iframe tabindex="-1" allow="autoplay; encrypted-media"></iframe>')
+                .toggleClass('tfeed__pre', preload)
+                .attr('src', BRIDGE + '?id=' + p.id + '&v=' + encodeURIComponent(item.tfeed_video.key) + '&preload=' + (preload ? 1 : 0));
+            html.find('.tfeed__video').append(p.frame);
+            players.push(p);
+            return p;
+        }
+
+        function killPlayer(p) {
+            if (p === cur) {
+                cur = null;
+                clearTimeout(nextTimer);
+                clearTimeout(watchdog);
+            }
+            post(p, 'destroy');
+            p.frame.remove();
+            players.splice(players.indexOf(p), 1);
+        }
+
+        function stopAll() {
+            players.slice().forEach(killPlayer);
+        }
+
+        // Держим живыми текущий и LIVE_AHEAD следующих с трейлером, остальные выгружаем.
+        function plan() {
+            if (index < 0 || !items[index]) return;
+            var keep = [items[index]];
+            for (var i = index + 1; i < items.length && keep.length <= LIVE_AHEAD; i++) {
+                var v = items[i].tfeed_video;
+                if (v === undefined) {
+                    ensureVideo(items[i], plan); // узнаем — и спланируем заново
+                    break;
+                }
+                if (v) keep.push(items[i]);
+            }
+            players.slice().forEach(function (p) {
+                if (keep.indexOf(p.item) < 0) killPlayer(p);
+            });
+            keep.slice(1).forEach(function (item) {
+                if (!findPlayer(item)) makePlayer(item, true);
+            });
+        }
+
+        function playItem(item) {
+            var p = findPlayer(item);
+            if (p) {
+                p.frame.removeClass('tfeed__pre');
+                post(p, 'play');
+            } else {
+                p = makePlayer(item, false);
+            }
+            cur = p;
             heard = '';
+            status(p.ready ? '' : 'Загрузка трейлера…');
+            clearTimeout(watchdog);
             // Без ответа плеера пишем, на каком шаге он застрял: так видно, где рвётся цепочка.
-            watchdog = setTimeout(function () {
+            if (!p.ready) watchdog = setTimeout(function () {
                 status('YouTube не отвечает · ' + (heard ? 'последний ответ: ' + heard : 'страница плеера не ответила'));
             }, 15000);
+            plan();
         }
 
         function onMessage(event) {
             var data = event.data;
-            if (!data || !bridgeId || data.bridgeId !== bridgeId) return;
+            var p = data && players.filter(function (x) { return x.id === data.bridgeId; })[0];
+            if (!p) return;
+            if (data.type === 'ready') p.ready = true;
+            if (data.type === 'error') {
+                // YouTube запретил встраивание: такой фильм больше не предлагаем.
+                p.item.tfeed_video = null;
+                renderSide();
+            }
+            if (p !== cur) {
+                if (data.type === 'error') {
+                    killPlayer(p);
+                    plan();
+                }
+                return;
+            }
             heard = data.type + (data.data && data.data.state !== undefined ? ' ' + data.data.state : '') +
                 (data.data && data.data.error !== undefined ? ' ' + data.data.error : '');
             if (data.type === 'bridgeReady') status('Загрузка трейлера… · плеер открыт, жду YouTube');
@@ -199,7 +269,7 @@
                 clearTimeout(watchdog);
                 status('');
             }
-            // 0 — ролик закончился; error — YouTube запретил встраивание этого ролика.
+            // 0 — ролик закончился; error — встраивание запрещено.
             if ((data.type === 'stateChange' && data.data && data.data.state === 0) || data.type === 'error') {
                 if (data.type === 'error') status('Трейлер недоступен, листаю дальше…');
                 nextTimer = setTimeout(function () { show(index + 1, 1); }, data.type === 'error' ? 1500 : 300);
@@ -218,9 +288,18 @@
             }
         }
 
-        // Заранее узнаём трейлеры следующих: листание быстрее, а пустые не попадают в колонку.
+        // Заранее: трейлер (чтобы пустые не попадали в колонку), логотип и картинки — при листании всё уже есть.
         function prefetch() {
-            for (var i = index + 1; i < Math.min(items.length, index + 1 + AHEAD * 2); i++) ensureVideo(items[i], renderSide);
+            for (var i = index + 1; i < Math.min(items.length, index + 1 + META_AHEAD); i++) {
+                var item = items[i];
+                ensureVideo(item, renderSide);
+                ensureLogo(item, function (url) { if (url) new Image().src = url; });
+                if (!item.tfeed_warm) {
+                    item.tfeed_warm = true;
+                    if (item.poster_path) new Image().src = Lampa.Api.img(item.poster_path, 'w200');
+                    if (item.backdrop_path) new Image().src = Lampa.Api.img(item.backdrop_path, 'w1280');
+                }
+            }
         }
 
         function info(item) {
@@ -251,18 +330,19 @@
                     else status(TYPES[type] + ' в этом жанре закончились');
                 });
             }
-            if (i >= items.length - 3) loadPage();
+            if (i >= items.length - META_AHEAD) loadPage();
 
             index = i;
             var item = items[i];
             var my = ++seq;
-            stopVideo();
+            // Прошлый ролик выгружаем сразу, чтобы не звучал поверх следующего.
+            if (cur && cur.item !== item) killPlayer(cur);
             info(item);
             renderSide();
-            status('Загрузка трейлера…');
+            if (!findPlayer(item)) status('Загрузка трейлера…');
             ensureVideo(item, function (video) {
                 if (my !== seq) return;
-                if (video) playVideo(video.key);
+                if (video) playItem(item);
                 else show(index + dir, dir); // нет трейлера на YouTube — пропускаем в ту же сторону
             });
             prefetch();
@@ -335,16 +415,17 @@
             Lampa.Controller.toggle('content');
             fullscreen(true);
             // Вернулись из карточки — продолжаем с того же трейлера.
-            if (index >= 0 && !bridgeId && items[index] && items[index].tfeed_video) playVideo(items[index].tfeed_video.key);
+            if (index >= 0 && !cur && items[index] && items[index].tfeed_video) playItem(items[index]);
         };
 
-        this.pause = function () { stopVideo(); fullscreen(false); };
-        this.stop = function () { stopVideo(); fullscreen(false); };
+        // В карточке фильма плееры не нужны: выгружаем все, по возвращении start() поднимет заново.
+        this.pause = function () { stopAll(); fullscreen(false); };
+        this.stop = function () { stopAll(); fullscreen(false); };
         this.render = function () { return html; };
         this.destroy = function () {
             seq++;
             feedGen++;
-            stopVideo();
+            stopAll();
             fullscreen(false);
             window.removeEventListener('message', onMessage);
             html.remove();
