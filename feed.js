@@ -109,6 +109,8 @@
         var cur = null;       // плеер, который сейчас на экране
         var frameId = '';     // yt.html в режиме bridgeMode
         var nextTimer, watchdog, debugTimer;
+        var tPress = 0;       // отладка: когда нажали ▲▼, чтобы мерить время до старта
+        var lastStart = '';   // отладка: итог последнего переключения
         var self = this;
 
         function status(text) {
@@ -246,8 +248,18 @@
                     onStateChange: function (e) {
                         if (preload && !p.buffered && !p.wantPlay && e.data === window.YT.PlayerState.PLAYING) {
                             p.buffered = true;
+                            p.tBuffered = Date.now();
                             p.yt.pauseVideo();
                             return;
+                        }
+                        if (DEBUG && p.tPromote && !p.started) {
+                            p.path.push(e.data);
+                            if (e.data === window.YT.PlayerState.PLAYING) {
+                                p.started = true;
+                                lastStart = 'старт ' + (Date.now() - p.tPromote) + ' мс' +
+                                    (p.tBuffered ? ', ждал ' + Math.round((p.tPromote - p.tBuffered) / 1000) + ' с' : ', без буфера') +
+                                    ', путь ' + p.path.join('→');
+                            }
                         }
                         onPlayer(p, 'state', e.data);
                     },
@@ -316,11 +328,15 @@
                 }
                 var p = findPlayer(item);
                 if (p) {
+                    p.tPromote = tPress;
+                    p.path = [];
                     p.el.removeClass('tfeed__pre');
                     p.wantPlay = true;
                     if (p.ready) startSound(p);
                 } else {
                     p = makePlayer(item, false);
+                    p.tPromote = tPress;
+                    p.path = [];
                 }
                 cur = p;
                 status(p.ready ? '' : 'Загрузка трейлера…');
@@ -390,6 +406,7 @@
                 var loaded = next.ready && next.yt.getVideoLoadedFraction ? Math.round(next.yt.getVideoLoadedFraction() * 100) : 0;
                 text += ' · след.: ' + (next.buffered ? 'в буфере ' + loaded + '%' : next.ready ? 'готовится' : 'загрузка');
             }
+            if (lastStart) text += ' · ' + lastStart;
             html.find('.tfeed__chip').text(text);
         }
 
@@ -452,6 +469,7 @@
             index = i;
             var item = items[i];
             var my = ++seq;
+            tPress = Date.now();
             // Прошлый ролик выгружаем сразу, чтобы не звучал поверх следующего.
             if (cur && cur.item !== item) killPlayer(cur);
             frameId = '';
