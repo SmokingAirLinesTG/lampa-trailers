@@ -197,7 +197,7 @@
             return { title: Lampa.Utils.capitalizeFirstLetter(Lampa.Lang.translate(g.title)), genre: g.id };
         }));
         Lampa.Select.show({
-            title: 'Трейлеры',
+            title: 'Лента трейлеров',
             items: items,
             onSelect: function (a) {
                 Lampa.Activity.push({ url: '', title: 'Трейлеры: ' + a.title, component: 'trailers_feed', genre: a.genre, page: 1 });
@@ -211,9 +211,9 @@
         Lampa.Component.add('trailers_feed', Feed);
         var icon = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
         if (Lampa.Menu.addButton) {
-            Lampa.Menu.addButton(icon, 'Трейлеры', openGenres);
+            Lampa.Menu.addButton(icon, 'Лента трейлеров', openGenres);
         } else {
-            var item = $('<li class="menu__item selector"><div class="menu__ico">' + icon + '</div><div class="menu__text">Трейлеры</div></li>');
+            var item = $('<li class="menu__item selector"><div class="menu__ico">' + icon + '</div><div class="menu__text">Лента трейлеров</div></li>');
             item.on('hover:enter', openGenres);
             $('.menu .menu__list').eq(0).append(item);
         }
