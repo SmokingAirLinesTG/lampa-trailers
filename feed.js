@@ -72,7 +72,8 @@
         var feedGen = 0;      // отбрасывает страницы прежнего жанра, если его сменили во время загрузки
         var seq = 0;          // отбрасывает ответы для фильма, с которого уже пролистали
         var bridgeId = '';
-        var nextTimer;
+        var nextTimer, watchdog;
+        var heard = '';       // последний ответ YouTube-плеера, для сообщения о зависании
         var self = this;
 
         function status(text) {
@@ -163,6 +164,7 @@
 
         function stopVideo() {
             clearTimeout(nextTimer);
+            clearTimeout(watchdog);
             bridgeId = '';
             html.find('.tfeed__video').empty();
         }
@@ -180,12 +182,23 @@
             frame.src = Lampa.Manifest.github_lampa + 'youtube.html?bridgeId=' + bridgeId +
                 '&videoId=' + key + '&autoplay=1&controls=0&mute=0&start=0';
             html.find('.tfeed__video').append(frame);
+            heard = '';
+            // Без ответа плеера пишем, на каком шаге он застрял: так видно, где рвётся цепочка.
+            watchdog = setTimeout(function () {
+                status('YouTube не отвечает · ' + (heard ? 'последний ответ: ' + heard : 'страница плеера не ответила'));
+            }, 15000);
         }
 
         function onMessage(event) {
             var data = event.data;
             if (!data || !bridgeId || data.bridgeId !== bridgeId) return;
-            if (data.type === 'ready') status('');
+            heard = data.type + (data.data && data.data.state !== undefined ? ' ' + data.data.state : '') +
+                (data.data && data.data.error !== undefined ? ' ' + data.data.error : '');
+            if (data.type === 'bridgeReady') status('Загрузка трейлера… · плеер открыт, жду YouTube');
+            if (data.type === 'ready') {
+                clearTimeout(watchdog);
+                status('');
+            }
             // 0 — ролик закончился; error — YouTube запретил встраивание этого ролика.
             if ((data.type === 'stateChange' && data.data && data.data.state === 0) || data.type === 'error') {
                 if (data.type === 'error') status('Трейлер недоступен, листаю дальше…');
@@ -271,7 +284,8 @@
             });
             list.push({ title: 'Жанр', separator: true });
             [{ id: 0 }].concat(tmdb.genres[type]).forEach(function (g) {
-                list.push({ title: genreTitle(type, g.id) + (g.id === genre ? '  ✓' : ''), tfeed_genre: g.id, selected: g.id === genre });
+                // Галочку у выбранного жанра Lampa ставит сама (selected).
+                list.push({ title: genreTitle(type, g.id), tfeed_genre: g.id, selected: g.id === genre });
             });
             Lampa.Select.show({
                 title: 'Лента трейлеров',
