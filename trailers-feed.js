@@ -8,7 +8,9 @@
     var tmdb = Lampa.Api.sources.tmdb;
 
     var css = '' +
-        '.tfeed{position:relative;width:100%;height:100vh;background:#000;overflow:hidden}' +
+        // На весь экран: bridge-плеер YouTube из Lampa кадрирует видео под размер окна.
+        '.tfeed{position:fixed;left:0;top:0;width:100%;height:100%;background:#000;overflow:hidden}' +
+        'body.tfeed--on .head{display:none}' +
         '.tfeed__bg,.tfeed__video,.tfeed__video iframe{position:absolute;left:0;top:0;width:100%;height:100%;border:0}' +
         '.tfeed__bg{background-size:cover;background-position:center;opacity:.35}' +
         '.tfeed__video iframe{pointer-events:none}' +
@@ -82,6 +84,10 @@
             clearTimeout(nextTimer);
             bridgeId = '';
             html.find('.tfeed__video').empty();
+        }
+
+        function fullscreen(on) {
+            $('body').toggleClass('tfeed--on', on);
         }
 
         function playVideo(key) {
@@ -177,16 +183,18 @@
                 back: function () { Lampa.Activity.backward(); }
             });
             Lampa.Controller.toggle('content');
+            fullscreen(true);
             // Вернулись из карточки фильма — продолжаем с того же трейлера.
             if (index >= 0 && !bridgeId && items[index] && items[index].tfeed_video) playVideo(items[index].tfeed_video.key);
         };
 
-        this.pause = function () { stopVideo(); };
-        this.stop = function () { stopVideo(); };
+        this.pause = function () { stopVideo(); fullscreen(false); };
+        this.stop = function () { stopVideo(); fullscreen(false); };
         this.render = function () { return html; };
         this.destroy = function () {
             seq++;
             stopVideo();
+            fullscreen(false);
             window.removeEventListener('message', onMessage);
             html.remove();
         };
